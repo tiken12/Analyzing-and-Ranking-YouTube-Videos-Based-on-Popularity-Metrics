@@ -21,8 +21,10 @@ def authenticate_youtube():
     return youtube
 
 # Function to fetch video details based on a keyword or other criteria
-def fetch_video_data(youtube, keyword, max_results=10):
-    request = youtube.search().list(
+def fetch_video_data(youtube,video_ids, keyword, max_results=10):
+    #request = youtube.search().list(
+    request = youtube.videos().list(
+        id=",".join(video_ids),
         part="snippet",
         q=keyword,
         maxResults=max_results,
