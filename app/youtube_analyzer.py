@@ -1,52 +1,53 @@
-import os
-import google_auth_oauthlib.flow
-import googleapiclient.discovery
-import googleapiclient.errors
 import pandas as pd
+from main import generate_summary
+from youtube_transcript_api import YouTubeTranscriptApi
+from sklearn.feature_extraction.text import CountVectorizer
 
-# Define API credentials and service
-def authenticate_youtube():
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # Only for development
-    api_service_name = "youtube"
-    api_version = "v3"
-    client_secrets_file = "credentials.json"
+# Keyword Relevance
+def get_keyword_relevance(summary, keyword):
+    vectorizer = CountVectorizer(vocabulary=[keyword])
+    relevance_score = vectorizer.fit_transform([summary]).toarray().sum()
+    return relevance_score
 
-    flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
-        client_secrets_file, ["https://www.googleapis.com/auth/youtube.readonly"]
+# Content Depth
+def get_content_depth_score(summary, max_words=500):
+    word_count = len(summary.split())
+    return min(word_count / max_words, 1)
+
+# Fetch transcripts
+def get_video_transcript(video_id):
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        print( " ".join([entry['text'] for entry in transcript]))
+        return " ".join([entry['text'] for entry in transcript])
+    except Exception as e:
+        return None
+
+# Ranking Videos
+def rank_videos(video_data, video_stats):
+    video_df = pd.DataFrame(video_data)
+    stats_df = pd.DataFrame(video_stats)
+    merged_df = pd.merge(video_df, stats_df, on="video_id")
+
+    # Fetch transcripts and generate summaries
+    merged_df['transcript'] = merged_df['video_id'].apply(get_video_transcript)
+    merged_df['summary'] = merged_df.apply(
+        lambda row: generate_summary(row['title'], row['title'], row['transcript']), axis=1
     )
-    credentials = flow.run_console()
-    youtube = googleapiclient.discovery.build(
-        api_service_name, api_version, credentials=credentials
+
+    # Calculate features
+    merged_df['keyword_relevance'] = merged_df['summary'].apply(
+        lambda summary: get_keyword_relevance(summary, "your search keyword")
     )
-    return youtube
+    merged_df['content_depth'] = merged_df['summary'].apply(get_content_depth_score)
 
-# Function to fetch video details based on a keyword or other criteria
-def fetch_video_data(youtube,video_ids, keyword, max_results=10):
-    #request = youtube.search().list(
-    request = youtube.videos().list(
-        id=",".join(video_ids),
-        part="snippet",
-        q=keyword,
-        maxResults=max_results,
-        type="video"
+    # Calculate ranking score
+    merged_df['score'] = (
+        merged_df['views'] * 0.4 +
+        merged_df['likes'] * 0.3 +
+        merged_df['keyword_relevance'] * 0.2 +
+        merged_df['content_depth'] * 0.1
     )
-    response = request.execute()
 
-    video_data = []
-    for item in response.get("items", []):
-        video_id = item["id"]["videoId"]
-        title = item["snippet"]["title"]
-        # You can add more fields as needed, such as view count, likes, etc.
-        video_data.append({
-            "video_id": video_id,
-            "title": title,
-        })
-    return video_data
-
-# Main execution to fetch data
-if __name__ == "__main__":
-    youtube = authenticate_youtube()
-    keyword = "your_search_keyword"  # e.g., "robotic surgery"
-    video_data = fetch_video_data(youtube, keyword)
-    df = pd.DataFrame(video_data)
-    print(df)
+    # Return ranked videos
+    return merged_df.sort_values(by='score', ascending=False).reset_index(drop=True)
